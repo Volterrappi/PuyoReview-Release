@@ -1,53 +1,26 @@
-# v1.0.0 ソース版の公開前チェック（2026-10-13 更新）
+# v1.0.1 公開候補チェック（2026-10-16）
 
-## Windows実機チェック（ユーザー確認済み）
-- [x] 新しいZIPを別フォルダに展開して SETUP_FIRST.bat で Libraries OK / Setup complete
-- [x] START_Analysis.bat で盤面入力、連鎖STATS、3手全探索
-- [x] START_Review.bat でMP4再生、盤面キャプチャ
-- [x] YouTube再生・一時停止・盤面取り込み
-- [x] 振り返り記録の保存とアプリ再起動後の読み込み
+## 確認済み
+- [x] ユーザーがpreview8を公開候補として選択
+- [x] 記録保存・CSV・画像についてユーザーから動作確認の報告
+- [x] Windows/Python 3.12.14/Pillow 12.3.0で自動テスト20件
+- [x] ZIP展開後のアプリ・基準表・記録管理画面の起動
+- [x] ソースZIPの構文・アーカイブ・不要ファイル・秘密情報パターンを検査
+- [x] 解析単体ZIPにReview/YouTube起動ファイル・Git履歴・ユーザー記録・バイナリを含めない
+- [x] preview8から機能を変えず公開名v1.0.1に統一
+- [x] READMEとRelease説明の起動手順・保存仕様を統一
+- [x] 公開元は既存Publicリポジトリ。Privateの履歴は取り込まない
 
-## GitHub側の確認
-- [x] 開発元 Volterrappi/PuyoReview はPrivateのまま
-- [x] 公開用 Volterrappi/PuyoReview-Release はPublic
-- [x] 公開用READMEにセットアップ手順・既知の制約を記載
-- [x] バージョン固定の requirements-windows.txt がある
-- [x] TERMS.md と THIRD_PARTY_NOTICES.md がある
-- [x] Release v1.0.0 はDraft（未公開）
-- [x] ソースZIP PuyoReview-Source-Windows-v1.0.0.zip がDraft添付済み（GitHub表示64,300バイト）
-- [x] Private / Public 両リポジトリで同じパスの主要ソースをGit blob SHAで照合（21ファイル一致）
+## 公開前の残作業
+- [ ] 公開候補ブランチとPRに修正・テスト・文書を反映
+- [ ] GitHub Actions成功を確認
+- [ ] Release Draftに今回のZIPとSHA256を添付
+- [ ] 添付したZIPのハッシュを検証済みファイルと照合
+- [ ] 旧DraftのEXE版・旧ZIPが利用者の導線に混ざらない状態にする
+- [x] 配布アイコン6点は、このツール用に自作・生成した画像とのユーザー確認（2026-10-16）
+- [ ] 公開内容をユーザーが確認後にPublish
 
-## YouTube機能を初回公開から除外する決定（2026-10-13）
-- [x] ユーザー判断：YouTube機能なしで初回公開する
-- [x] GitHub公開用 review.py の起動ボタンを除去し、YouTube起動メソッドを無効化
-- [x] README.md、RELEASE_NOTES_SOURCE.md にYouTube機能無効を明示
-- [ ] **重要：Draftに添付されたソースZIPは変更前のまま。更新済みreview.pyを含むZIPを再生成・再添付するまで公開しない**
-- [ ] 最終ZIP内でYouTubeプレイヤー関連のコードを配布する必要があるか再確認（機能停止済みだがソース自体は現在リポジトリ内に存在）
+## 別途の改善として保留
+保存先の自由選択、Explorer直接移動への追従、保存結果のアプリ内プレビュー、対応想定モード、テンパイ本格化、YouTube。
 
-## ソースZIP再生成（2026-10-13）
-- [x] 公開用リポジトリに scripts/package_windows_source.py を追加（YouTube専用4ファイルをZIPから除外）
-- [x] Windows GitHub Actions .github/workflows/package-source.yml を追加（生成・構文検査・Artifact保存）
-- [ ] GitHub Actionsの実行成功を確認（現在、run一覧からは確認できず）
-- [ ] 新ArtifactのZIPをダウンロードしてRelease Draftの同名添付ZIPを差し替える（GitHub連携からRelease asset更新は未実施）
-- [ ] 差し替えたZIPで動作確認
-
-## 公開前の必須確認と作業
-- [ ] 実機確認したZIPとRelease添付ZIPが同一か、SHA-256等で照合する（GitHub添付ZIPのバイト単位検証は未実施）
-- [ ] 旧EXE版の2つのZIP（PuyoReview-Windows.zip / PuyoAnalysis-Windows.zip）をDraftから削除または別Releaseへ分離する
-- [ ] Release本文を RELEASE_NOTES_SOURCE.md に基づくソース版説明へ変更する
-- [ ] 利用した第三者ソース・画像の由来と必要なライセンス表示を最終確認する
-- [x] YouTube機能は初回公開から除外する方針を決定（レビューUIと起動経路を無効化。ZIP反映は未完了）
-- [ ] 最終配布ZIPのファイル一覧、個人情報、API鍵、不要なバイナリ・Git履歴が含まれないことを確認する
-- [ ] 以上を確認したうえで Publish release（現状Draft維持）
-
-- [ ] YouTube無効化後の最終ZIPで、MP4再生・解析・記録の簡易スモークテストを実施
-
-## 任意の追加テスト
-- [ ] 別Windows PC、またはクリーンなPython 3.12環境で再現確認
-- [ ] 異常URL、破損MP4、空入力などのエラー処理を確認
-
-## 注意
-- 開発用PrivateリポジトリをPublicにしない（Git履歴に個人メールアドレスの懸念）。
-- Private側の scripts/package_source_release.py は旧24ファイル構成で、公開用セットアップBATを含まない。現在のWindows用配布ZIP生成方法として再利用しない。
-- 自作コードの公開条件はTERMS.md（MIT等のオープンソース許諾ではない）。
-- 現在のRelease Draftには旧EXE版ZIPが残り、本文も旧EXE版について述べている。確認前にPublishしない。
+クリーンなPython環境でのSETUP_FIRST.bat完走は今回のローカル自動テストの対象外です。従来セットアップのユーザー動作確認とは区別します。

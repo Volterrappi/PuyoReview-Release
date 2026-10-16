@@ -1,5 +1,6 @@
 """Standalone local review records, grouped in user-created folders."""
 import json
+import csv
 import re
 import shutil
 import uuid
@@ -59,7 +60,7 @@ def list_records(folder=None):
     records = read_index()["records"]
     return [r for r in records if folder is None or r.get("folder") == folder]
 
-def save(folder, name, analysis_type, memo, board, next_pairs, result, screenshot=None):
+def save(folder, name, analysis_type, memo, board, next_pairs, result, screenshot=None, csv_rows=None):
     data = read_index()
     if folder not in data["folders"]:
         raise ValueError("保存先フォルダがありません")
@@ -73,12 +74,22 @@ def save(folder, name, analysis_type, memo, board, next_pairs, result, screensho
     item = dict(id=uid, number=order, folder=folder, name=name.strip() or now,
                 analysis_type=analysis_type, memo=memo, saved_at=now, source_type="manual",
                 board=list(board), next_pairs=list(next_pairs), analysis_result=result,
-                screenshot=None)
+                screenshot=None, csv_file=None, version=2)
     try:
         if screenshot is not None:
             picture = target / "screenshot.png"
             screenshot.convert("RGB").save(picture, format="PNG")
-            item["screenshot"] = str(picture)
+            item["screenshot"] = picture.name
+        if csv_rows is not None:
+            rows = iter(csv_rows)
+            first = next(rows, None)
+            with (target / "candidates.csv").open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(first) if first is not None else ['探索番号'])
+                writer.writeheader()
+                if first is not None:
+                    writer.writerow(first)
+                    writer.writerows(rows)
+            item["csv_file"] = "candidates.csv"
         _atomic(target / "record.json", item)
         data["records"].append({k:item[k] for k in ("id","number","folder","name","analysis_type","memo","saved_at")})
         _atomic(INDEX, data)
@@ -94,6 +105,28 @@ def load(record_id):
         raise ValueError("記録が見つかりません")
     path = _inside(ROOT / found["folder"] / record_id / "record.json")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def record_directory(record_id):
+    found = next((r for r in read_index()["records"] if r["id"] == record_id), None)
+    if found is None:
+        raise ValueError("記録が見つかりません")
+    return _inside(ROOT / found["folder"] / record_id)
+
+
+def attachment(record_id, key):
+    """Resolve relative attachments, including moved legacy absolute image paths."""
+    item = load(record_id)
+    value = item.get(key)
+    if not value:
+        return None
+    directory = record_directory(record_id)
+    # Attachments belong to the record. Do not open a legacy external path.
+    name = str(value).replace("\\", "/").rsplit("/", 1)[-1]
+    if name in ("", ".", ".."):
+        return None
+    path = _inside(directory / name)
+    return path if path.is_file() else None
 
 def move(record_id, destination):
     data = read_index()

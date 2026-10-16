@@ -1,6 +1,8 @@
 name: Package source ZIP (YouTube OFF)
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     paths:
@@ -31,16 +33,33 @@ jobs:
       - name: Generate and inspect source ZIP
         shell: pwsh
         run: |
+          python -m pip install "Pillow==12.3.0"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/package_windows_source.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m compileall -q puyo_tools
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m unittest discover -s tests -p test_standalone.py
+          python -m unittest discover -s tests -p "test_*.py"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify first-time setup from distributed ZIP
+        shell: pwsh
+        env:
+          PY_PYTHON3: '3.12'
+        run: |
+          Expand-Archive -LiteralPath dist/PuyoAnalysis-Source-Windows-v1.0.1.zip -DestinationPath setup-smoke
+          $packageRoot = (Resolve-Path setup-smoke/PuyoAnalysis-Source-Windows-v1.0.1).Path
+          Push-Location $packageRoot
+          cmd /c "echo.|SETUP_FIRST.bat"
+          $setupExit = $LASTEXITCODE
+          if ($setupExit -ne 0) { exit $setupExit }
+          .\.venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'puyo_tools'); from app import App; app = App(); app.update(); app.destroy(); print('Packaged GUI OK')"
+          $guiExit = $LASTEXITCODE
+          Pop-Location
+          if ($guiExit -ne 0) { exit $guiExit }
       - name: Upload ZIP for draft release
         uses: actions/upload-artifact@v4
         with:
-          name: PuyoReview-Source-Windows-v1.0.0
-          path: dist/PuyoReview-Source-Windows-v1.0.0.zip
+          name: PuyoAnalysis-Source-Windows-v1.0.1
+          path: dist/PuyoAnalysis-Source-Windows-v1.0.1.zip
           if-no-files-found: error
           retention-days: 30

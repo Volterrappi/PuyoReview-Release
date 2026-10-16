@@ -16,7 +16,7 @@ from crop_suggest import suggest as suggest_crop
 from common.analysis import candidate_stats, group_by_score, detail_row, matches_filters
 from common.engine import *
 from common.image_board import recognize_board, recognize_esports_next
-from common.reference import nuisance, nuisance_label, nuisance_parts, four_clear_rows, double_rows, multi_rows, TA_PACES, four_clear_at_height
+from common.reference import nuisance, nuisance_label, nuisance_parts, four_clear_rows, double_rows, multi_rows, TA_PACES, four_clear_at_height, group_equal_metrics
 
 PALETTE = {'.':'#202634','R':'#e94f58','B':'#438be5','G':'#4fc475','Y':'#f6d451','P':'#ba73e6','O':'#999fa9'}
 NAMES = {'.':'消去','R':'赤','B':'青','G':'緑','Y':'黄','P':'紫','O':'おじゃま'}
@@ -37,8 +37,7 @@ def draw_board(parent, board, cell=20, highlight=()):
             if ch!='.':canvas.create_oval(x+2,y+2,x+cell-2,y+cell-2,fill=PALETTE[ch],outline='#ffffff')
     for r,c in highlight:
         x=c*cell;y=r*cell
-        canvas.create_rectangle(x+1,y+1,x+cell-1,y+cell-1,outline='#111111',width=4)
-        canvas.create_rectangle(x+3,y+3,x+cell-3,y+cell-3,outline='#ffffff',width=2)
+        canvas.create_rectangle(x+1,y+1,x+cell-1,y+cell-1,outline='#c1d0d8',width=1)
     canvas.create_line(0,cell,W*cell,cell,fill='#ff9b72',width=2)
     canvas.pack()
     return canvas
@@ -208,9 +207,10 @@ class ChainAnimation(ttk.Frame):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title('ぷよぷよ 連鎖STATS・3手全探索（録画連携 v7.5）')
+        self.title('PuyoAnalysis v1.0.1 — 連鎖STATS・3手全探索')
         self.geometry('1330x850');self.minsize(1020,690)
         self.ojama_icons = {}
+        self.reference_icons = {}
         for name, filename in (('王冠','crown.png'),('月','moon.png'),('星','star.png'),
                                ('赤玉','red.png'),('大玉','large.png'),('小玉','small.png')):
             path = Path(__file__).resolve().parent / 'assets' / filename
@@ -218,6 +218,9 @@ class App(tk.Tk):
                 with Image.open(path) as source:
                     icon = source.convert('RGBA').resize((24, 24), Image.Resampling.NEAREST)
                 self.ojama_icons[name] = ImageTk.PhotoImage(icon)
+                quiet=icon.resize((18,18),Image.Resampling.LANCZOS)
+                quiet.putalpha(quiet.getchannel('A').point(lambda value:round(value*0.55)))
+                self.reference_icons[name]=ImageTk.PhotoImage(quiet)
         self.queue=Queue();self.results=[];self.stats=[];self.order=[];self.groups=[];self.filtered=[]
         self.current=EMPTY;self.cells=[list(row) for row in EMPTY]
         self.paint=tk.StringVar(value='R');self.pairs_var=tk.StringVar(value='.. .. ..');self.view=tk.StringVar(value='summary')
@@ -226,6 +229,8 @@ class App(tk.Tk):
         self.applied_score_bonus=False;self.applied_eff_mode="used";self.applied_initial_bonus=False
         self.filters=[];self.custom_sort=None
         self.undo_stack=[];self._drag_snapshot=None;self.search_board=None
+        self.search_context=None;self.pending_search_context=None;self.search_running=False
+        self.chain_context=None
         self.review_session=None;self.review_mode=None
         self.imported_image=None;self.latest_record_result=None
         self.build();self.after(100,self.poll)
@@ -234,14 +239,15 @@ class App(tk.Tk):
         ttk.Label(self,text='13段目は最上行（隠し段） | 左クリック: 選択色を置く / 右クリック: 消す | 配置到達判定は簡易モデル・子ぷよ14段目は候補に含む（14段目の保持・時間補正は未対応）',foreground='#a34c00').pack(anchor='w',padx=10,pady=5)
         outer=ttk.Panedwindow(self,orient='horizontal');outer.pack(fill='both',expand=True,padx=8,pady=6)
         left=ttk.Frame(outer);right=ttk.Frame(outer);outer.add(left,weight=1);outer.add(right,weight=4)
-        ttk.Label(left,text='盤面入力（色を選んでクリック）',font=('',11,'bold')).pack(anchor='w')
+        ttk.Label(left,text='① 盤面を入力',font=('',11,'bold')).pack(anchor='w')
+        ttk.Label(left,text='色を選び、盤面・NEXTをクリック').pack(anchor='w')
         palette=ttk.Frame(left);palette.pack(anchor='w',pady=5)
         for i,ch in enumerate('.RBGYPO'):
             b=tk.Radiobutton(palette,text=NAMES[ch],variable=self.paint,value=ch,indicatoron=False,
                              bg=PALETTE[ch],fg=('white' if ch in '.RBGPO' else 'black'),
                              selectcolor=PALETTE[ch],width=6,relief='raised')
             b.grid(row=i//4,column=i%4,padx=1,pady=2)
-        self.edit_cell=30
+        self.edit_cell=28
         editor_row=ttk.Frame(left);editor_row.pack(anchor='w',pady=4)
         self.editor=tk.Canvas(editor_row,width=W*self.edit_cell,height=H*self.edit_cell,bg='#202634',highlightthickness=0)
         self.editor.pack(side='left')
@@ -251,7 +257,7 @@ class App(tk.Tk):
         # One vertical 2-cell field per pair: child on top, axis on bottom.
         # The stored pair string remains axis->child (e.g. RB).
         self.pair_canvases=[]
-        self.pair_cell=30
+        self.pair_cell=28
         for index,title in enumerate(('現在手','ネクスト','ダブネク')):
             ttk.Label(pair_area,text=title).pack(anchor='w',pady=(8,0))
             canvas=tk.Canvas(pair_area,width=self.pair_cell,height=2*self.pair_cell,
@@ -262,7 +268,7 @@ class App(tk.Tk):
             canvas.bind('<Button-3>',lambda event,i=index:self.click_pair(event,i,'.'))
             canvas.bind('<B3-Motion>',lambda event,i=index:self.click_pair(event,i,'.'))
             self.pair_canvases.append(canvas)
-        self.pairs_var.trace_add('write',lambda *_:self.redraw_pairs())
+        self.pairs_var.trace_add('write',lambda *_:(self.redraw_pairs(),self.update_analysis_status()))
         self.redraw_pairs()
         self.editor.bind('<Button-1>',lambda e:self.edit_click(e,self.paint.get()))
         self.editor.bind('<B1-Motion>',lambda e:self.edit_click(e,self.paint.get()))
@@ -274,30 +280,41 @@ class App(tk.Tk):
         self.editor.bind('<ButtonRelease-3>',self.end_paint)
         self.bind_all('<Control-z>',self.undo_board)
         self.redraw_editor()
-        ttk.Button(left,text='1操作戻す（Ctrl+Z）',command=self.undo_board).pack(fill='x',pady=3)
-        ttk.Button(left,text='3手全探索前の盤面に戻す',command=self.restore_search_board).pack(fill='x',pady=3)
-        ttk.Button(left,text='空盤面に戻す',command=self.clear).pack(fill='x',pady=3)
-        ttk.Button(left,text='テキストで入力 / 貼り付け',command=self.text_import).pack(fill='x',pady=3)
-        ttk.Button(left,text='画像から盤面を読み取る',command=self.image_import).pack(fill='x',pady=3)
-        ttk.Button(left,text='クリップボードの画像を読み取る',command=self.image_import_clipboard).pack(fill='x',pady=3)
+        ttk.Button(left,text='1操作戻す（Ctrl+Z）',command=self.undo_board).pack(fill='x',pady=2)
+        ttk.Button(left,text='3手全探索前の盤面に戻す',command=self.restore_search_board).pack(fill='x',pady=2)
+        ttk.Button(left,text='空盤面に戻す',command=self.clear).pack(fill='x',pady=2)
+        ttk.Button(left,text='テキストで入力 / 貼り付け',command=self.text_import).pack(fill='x',pady=2)
+        ttk.Button(left,text='画像から盤面を読み取る',command=self.image_import).pack(fill='x',pady=2)
+        ttk.Button(left,text='クリップボードの画像を読み取る',command=self.image_import_clipboard).pack(fill='x',pady=2)
         self.review_save_btn=ttk.Button(left,text='振り返り記録に保存',command=self.save_review, state='disabled')
-        self.review_save_btn.pack(fill='x',pady=(12,3))
-        ttk.Button(left,text='現在の盤面・解析を記録',command=self.save_standalone).pack(fill='x',pady=3)
-        ttk.Button(left,text='記録一覧・フォルダ管理',command=self.open_record_manager).pack(fill='x',pady=3)
+        ttk.Separator(left).pack(fill='x',pady=7)
+        ttk.Label(left,text='③ 結果を保存',font=('',11,'bold')).pack(anchor='w')
+        ttk.Button(left,text='盤面・解析結果を保存',command=self.save_standalone).pack(fill='x',pady=3)
+        ttk.Label(left,text='3手探索は全候補CSVも一緒に保存',foreground='#66717c').pack(anchor='w')
+        ttk.Button(left,text='保存した記録を開く・整理',command=self.open_record_manager).pack(fill='x',pady=3)
         ttk.Button(left,text='テンパイ探索（試作）',command=self.open_tenpai_probe).pack(fill='x',pady=3)
         self.review_csv=tk.BooleanVar(value=False)
-        ttk.Checkbutton(left,text='3手全探索：CSVも保存（全候補）',variable=self.review_csv).pack(anchor='w',pady=3)
+        self.review_csv_check=ttk.Checkbutton(left,text='振り返り連携：全候補CSVも保存',variable=self.review_csv)
         self.initial_bonus=tk.BooleanVar(value=False)
-        ttk.Checkbutton(left,text='全消しボーナスを持って開始',variable=self.initial_bonus).pack(anchor='w')
-        ttk.Label(left,text='連鎖効率への全消しボーナス反映',font=('',10,'bold')).pack(anchor='w',pady=(8,1))
+        ttk.Label(right,text='② 解析する',font=('',11,'bold')).pack(anchor='w',padx=8)
+        ttk.Label(right,text='盤面の連鎖を見るなら「連鎖STATS」、NEXTを置く候補を探すなら「3手全探索」').pack(anchor='w',padx=8,pady=3)
+        self.analysis_status=ttk.Label(right,text='盤面を入力して、解析してください。',foreground='#66717c',wraplength=700)
+        self.analysis_status.pack(anchor='w',padx=8,pady=3)
+        self.details_button=ttk.Button(right,text='詳細設定を開く ▾',command=self.toggle_details)
+        self.details_button.pack(anchor='w',padx=8,pady=3)
+        self.details_frame=ttk.LabelFrame(right,text='解析の詳細設定',padding=8)
+        ttk.Checkbutton(self.details_frame,text='全消しボーナスを持って開始',variable=self.initial_bonus).pack(anchor='w')
+        ttk.Label(self.details_frame,text='連鎖効率への全消しボーナス反映',font=('',10,'bold')).pack(anchor='w',pady=(5,1))
         for label, value in [('加算しない','none'),('その手で使用したボーナスを加算','used'),('その手で獲得したボーナスを加算','earned')]:
-            ttk.Radiobutton(left,text=label,variable=self.eff_mode,value=value).pack(anchor='w')
+            ttk.Radiobutton(self.details_frame,text=label,variable=self.eff_mode,value=value).pack(anchor='w')
+        ttk.Checkbutton(self.details_frame,text='3手探索：未使用の全消しボーナスを評価得点に含める',variable=self.score_bonus).pack(anchor='w',pady=(5,0))
 
         self.tabs=ttk.Notebook(right);self.tabs.pack(fill='both',expand=True)
         self.tab1=ttk.Frame(self.tabs);self.tab2=ttk.Frame(self.tabs)
         self.tabs.add(self.tab1,text='連鎖STATS');self.tabs.add(self.tab2,text='3手全探索')
+        self.tabs.bind('<<NotebookTabChanged>>',lambda _:self.update_analysis_status())
         ttk.Button(self.tab1,text='この盤面の連鎖を計算',command=self.calculate_chain).pack(anchor='w',padx=8,pady=8)
-        ttk.Button(self.tab1,text='基準火力・効率（4個消し / 2ダブ）',command=self.show_reference).pack(anchor='w',padx=8)
+        ttk.Button(self.tab1,text='火力・効率の基準表',command=self.show_reference).pack(anchor='w',padx=8)
         self.chain_summary=ttk.Frame(self.tab1)
         self.chain_summary.pack(anchor='w',padx=8)
         # Scroll only the chain-board history; keep the summary visible.
@@ -315,18 +332,16 @@ class App(tk.Tk):
         self.chain_canvas.bind('<Leave>',self._chain_scroll_leave)
 
         bar=ttk.Frame(self.tab2);bar.pack(fill='x',pady=5)
-        self.search_button=ttk.Button(bar,text='全3手を探索',command=self.start_search)
+        self.search_button=ttk.Button(bar,text='NEXT 3組で全探索',command=self.start_search)
         self.search_button.pack(side='left',padx=5)
         ttk.Label(bar,text='並び順:').pack(side='left')
         self.sort=ttk.Combobox(bar,values=['3手合計得点','1手の最高得点','最大連鎖数','合計消去数'],state='readonly',width=15)
         self.sort.set('3手合計得点');self.sort.pack(side='left');self.sort.bind('<<ComboboxSelected>>',lambda e:(setattr(self,'custom_sort',None),self.show_results()))
         self.status=ttk.Label(bar,text='未探索');self.status.pack(side='left',padx=10)
         modebar=ttk.Frame(self.tab2);modebar.pack(fill='x',padx=5)
-        ttk.Radiobutton(modebar,text='まとめ版（得点別）',variable=self.view,value='summary',command=self.show_results).pack(side='left')
+        ttk.Radiobutton(modebar,text='同じ得点をまとめる',variable=self.view,value='summary',command=self.show_results).pack(side='left')
         ttk.Radiobutton(modebar,text='全候補を表示',variable=self.view,value='detail',command=self.show_results).pack(side='left',padx=12)
         ttk.Label(modebar,text='代表: ちぎり最少 → 全消し最多 → 探索順').pack(side='left')
-        togglebar=ttk.Frame(self.tab2);togglebar.pack(fill='x',padx=5,pady=3)
-        ttk.Checkbutton(togglebar,text='未使用の全消しボーナスを評価得点に含める',variable=self.score_bonus).pack(side='left')
 
         self.filters_visible=False
         self.filter_button=ttk.Button(self.tab2,text='絞り込みを表示 ▼',command=self.toggle_filters)
@@ -427,7 +442,40 @@ class App(tk.Tk):
         return [(f.get(),o.get(),v.get()) for f,o,v in self.filters if f.get()!='（条件なし）' and v.get().strip()]
 
     def row_for(self,i):
-        return detail_row(self.results[i],self.stats[i],self.applied_score_bonus,self.applied_eff_mode)
+        context=self.search_context or {}
+        return detail_row(self.results[i],self.stats[i],context.get('score_bonus',self.applied_score_bonus),context.get('efficiency_bonus_mode',self.applied_eff_mode))
+
+    def toggle_details(self):
+        if self.details_frame.winfo_manager():
+            self.details_frame.pack_forget()
+            self.details_button.configure(text='詳細設定を開く ▾')
+        else:
+            self.details_frame.pack(fill='x',padx=8,pady=4,before=self.tabs)
+            self.details_button.configure(text='詳細設定を閉じる ▴')
+
+    def update_analysis_status(self):
+        if not hasattr(self,'analysis_status') or not hasattr(self,'tabs'):return
+        search=self.tabs.select()==str(self.tab2)
+        context=self.search_context if search else self.chain_context
+        if search and self.search_running:
+            text='3手全探索中です。';color='#66717c'
+        elif context is None:
+            text='盤面とNEXTを入力して「NEXT 3組で全探索」を押してください。' if search else '盤面を入力して「この盤面の連鎖を計算」を押してください。'
+            color='#66717c'
+        else:
+            try:
+                changed=tuple(self.board())!=tuple(context['board'])
+                if search:changed=changed or tuple(self.pairs_var.get().upper().replace(',',' ').split())!=tuple(context['next_pairs'])
+            except ValueError:changed=True
+            text=('入力が変更されています。表示中の結果は前回の解析時のものです。' if changed else
+                  '入力中の盤面・NEXTの探索結果です。' if search else '入力中の盤面の解析結果です。')
+            color='#96652c' if changed else '#527366'
+        self.analysis_status.configure(text=text,foreground=color)
+
+    def saved_candidate_rows(self):
+        for i in range(len(self.results)):
+            row={'探索番号':i+1,**self.row_for(i)}
+            yield {k:('' if v is None else 'あり' if v is True else 'なし' if v is False else round(v,3) if isinstance(v,float) else v) for k,v in row.items()}
 
     def export_csv(self,all_candidates=False):
         if not self.results:
@@ -453,6 +501,7 @@ class App(tk.Tk):
             messagebox.showerror('CSV保存エラー',str(exc))
 
     def redraw_editor(self):
+        self.update_analysis_status()
         cv=self.editor;cv.delete('all');cell=self.edit_cell
         for r,row in enumerate(self.cells):
             for c,ch in enumerate(row):
@@ -592,7 +641,6 @@ class App(tk.Tk):
             source=source_image if source_image is not None else Image.open(filename)
             source.load()
             source=source.convert('RGB')
-            self.imported_image=source.copy()
         except Exception as exc:
             messagebox.showerror('画像読み込みエラー',str(exc));return
         window=tk.Toplevel(self);window.title('画像から盤面入力（1P・2P範囲指定）')
@@ -699,6 +747,7 @@ class App(tk.Tk):
                 messagebox.showerror('認識エラー',str(exc),parent=window);return
             old=self.snapshot_board()
             self.cells=[list(row) for row in board]
+            self.imported_image=source.copy()
             self.remember_board(old)
             self.redraw_editor()
             # Standard eSports side NEXT preview is approximate; never overwrite
@@ -756,14 +805,21 @@ class App(tk.Tk):
         if not self.load_board():return
         self.applied_eff_mode=self.eff_mode.get();self.applied_initial_bonus=self.initial_bonus.get()
         self.last_chain=simulate(self.current);self.review_mode='連鎖効率';self.render_chain(self.last_chain)
+        self.chain_context={'board':tuple(self.current)}
+        self.update_analysis_status()
 
-    def ojama_display(self, parent, score, *, compact=False):
+    def ojama_display(self, parent, score, *, compact=False, subdued=False):
         """Game-style icon sequence followed by :N個; no textual icon names."""
-        frame = ttk.Frame(parent)
+        frame = tk.Frame(parent,bg='#f7f8fa') if subdued else ttk.Frame(parent)
+        def label(**kwargs):
+            if subdued:
+                kwargs.update(bg='#f7f8fa',fg='#7b838c')
+                return tk.Label(frame,**kwargs)
+            return ttk.Label(frame,**kwargs)
         parts = nuisance_parts(score)
         total = nuisance(score)
         if not parts:
-            ttk.Label(frame, text=':0個', font=('', 11, 'bold')).pack(side='left')
+            label(text=':0個', font=('',9) if subdued else ('',11,'bold')).pack(side='left')
             return frame
         remaining_slots = 6
         for name, count in parts:
@@ -771,13 +827,13 @@ class App(tk.Tk):
                 break
             count = min(count, remaining_slots)
             remaining_slots -= count
-            icon = self.ojama_icons.get(name)
+            icon = (self.reference_icons if subdued else self.ojama_icons).get(name)
             for _ in range(count):
                 if icon:
-                    ttk.Label(frame, image=icon).pack(side='left', padx=0)
+                    label(image=icon).pack(side='left', padx=0)
                 else:
-                    ttk.Label(frame, text=name).pack(side='left')
-        ttk.Label(frame, text=f':{total:,}個', font=('', 10 if compact else 12, 'bold')).pack(side='left', padx=(4,0))
+                    label(text=name).pack(side='left')
+        label(text=f':{total:,}個', font=('',9) if subdued else ('',10 if compact else 12,'bold')).pack(side='left',padx=(4,0))
         return frame
 
     def show_ojama_icons(self, parent, score):
@@ -832,7 +888,7 @@ class App(tk.Tk):
         window.title('基準火力・効率（4個消し / 2ダブ・2トリ・2クア）')
         window.geometry('1120x720')
         ttk.Label(window,text='おじゃま表示：王冠=720個 / 月=360個 / 星=180個 / 赤玉=30個 / 大玉=6個 / 小玉=1個（70点=1個）').pack(anchor='w',padx=10,pady=(8,0))
-        ttk.Label(window,text='効率比較：4個消し＝1000万TA（120/100/80分ペース）／2ダブ系＝同じ残し高さの4個消し3・4・5連鎖').pack(anchor='w',padx=10,pady=(3,0))
+        ttk.Label(window,text='4個消し＝1000万TAとの比較／2ダブ系＝同じ残し高さの3・4・5連鎖を参考行に表示').pack(anchor='w',padx=10,pady=(3,0))
         notebook=ttk.Notebook(window);notebook.pack(fill='both',expand=True,padx=8,pady=8)
         four=ttk.Frame(notebook);multiple=ttk.Frame(notebook)
         notebook.add(four,text='4個消し 1〜19連鎖')
@@ -858,8 +914,9 @@ class App(tk.Tk):
             window_id=canvas.create_window((0,0),window=content,anchor='nw')
             content.bind('<Configure>',lambda e:canvas.configure(scrollregion=canvas.bbox('all')))
             canvas.bind('<Configure>',lambda e:canvas.itemconfigure(window_id,width=e.width))
-            labels=(['種類','連結数'] if multiple_groups else ['連鎖数'])
-            labels+=['得点','おじゃま表示','連鎖時間(秒)','連鎖時間＋補充時間(秒)','効率(点/秒)','基準効率との比較']
+            labels=(['種類','連結数（複数はクリックで内訳）'] if multiple_groups else ['連鎖数'])
+            labels+=['得点','おじゃま表示','連鎖時間(秒)','連鎖時間＋補充時間(秒)','効率(点/秒)']
+            if not multiple_groups:labels+=['基準効率との比較']
             for j,title in enumerate(labels):
                 ttk.Label(content,text=title,font=('',10,'bold'),padding=(8,7)).grid(row=0,column=j,sticky='w')
             nuisance_col=3 if multiple_groups else 2
@@ -890,23 +947,32 @@ class App(tk.Tk):
                 next_btn.configure(state='normal' if page+1<pages else 'disabled')
                 for i,row in enumerate(subset,1):
                     if multiple_groups:
-                        baselines=[four_clear_at_height(n,state['height'])['efficiency'] for n in (3,4,5)]
-                        comparison=' / '.join(f'{n}連:{row["efficiency"]/b:.2f}倍' if b>0 else f'{n}連:―' for n,b in zip((3,4,5),baselines))
-                        passed=sum(row['efficiency']>=b for b in baselines)
+                        comparison='';passed=0
                     else:
                         comparison=' / '.join(f'{m}分:{row["efficiency"]/b:.2f}倍' for m,b in TA_PACES.items())
                         passed=sum(row['efficiency']>=b for b in TA_PACES.values())
                     background='#c4d5e6' if passed==3 else '#e5edf5' if passed>0 else '#f2f5f9'
+                    if row.get('reference'):background='#f7f8fa'
+                    foreground='#7b838c' if row.get('reference') else '#162533'
                     values=([row['kind'],row['groups']] if multiple_groups else [f"{row['chain']}連鎖"])
                     values.append(f"{row['score']:,}")
                     for j,value in enumerate(values):
-                        tk.Label(content,text=value,bg=background,fg='#162533',padx=8,pady=4,anchor='w').grid(row=i,column=j,sticky='nsew')
+                        label=tk.Label(content,text=value,bg=background,fg=foreground,padx=8,pady=4,anchor='w')
+                        label.grid(row=i,column=j,sticky='nsew')
+                        if multiple_groups and j==1 and len(row.get('variants',[]))>1:
+                            label.configure(cursor='hand2')
+                            detail='\n'.join(f'{kind}：{groups}' for kind,groups in row['variants'])
+                            label.bind('<Button-1>',lambda event,text=detail:messagebox.showinfo('同じ火力・効率の内訳',text,parent=window))
                     ojama_holder=tk.Frame(content,bg=background)
                     ojama_holder.grid(row=i,column=nuisance_col,sticky='nsew')
-                    self.ojama_display(ojama_holder,row['score'],compact=True).pack(anchor='w',padx=8,pady=3)
-                    time_values=[f"{row['frames']/60:.3f}",f"{row['seconds']:.3f}",f"{row['efficiency']:,.2f}",comparison]
+                    if row.get('reference'):
+                        self.ojama_display(ojama_holder,row['score'],compact=True,subdued=True).pack(anchor='w',padx=8,pady=3)
+                    else:
+                        self.ojama_display(ojama_holder,row['score'],compact=True).pack(anchor='w',padx=8,pady=3)
+                    time_values=[f"{row['frames']/60:.3f}",f"{row['seconds']:.3f}",f"{row['efficiency']:,.2f}"]
+                    if not multiple_groups:time_values.append(comparison)
                     for j,value in enumerate(time_values,nuisance_col+1):
-                        tk.Label(content,text=value,bg=background,fg='#162533',padx=8,pady=4,anchor='w').grid(row=i,column=j,sticky='nsew')
+                        tk.Label(content,text=value,bg=background,fg=foreground,padx=8,pady=4,anchor='w').grid(row=i,column=j,sticky='nsew')
                 bind_wheel(content)
                 canvas.yview_moveto(0)
             def change_page(offset):state['page']+=offset;show_page()
@@ -915,6 +981,8 @@ class App(tk.Tk):
             for ev in ('<MouseWheel>','<Button-4>','<Button-5>'):canvas.bind(ev,wheel)
             def fill(data,reference_height=None):
                 if reference_height is not None:state['height']=reference_height
+                if multiple_groups:
+                    data=group_equal_metrics(data)+[dict(four_clear_at_height(n,state['height']),kind=f'参考：{n}連鎖',groups='各連鎖4個消し',reference=True) for n in (3,4,5)]
                 state['data']=sorted(data,key=lambda row:(row['efficiency'],row['score']))
                 state['page']=0
                 show_page()
@@ -934,7 +1002,7 @@ class App(tk.Tk):
         def refresh(*_):
             try:
                 h=int(height.get())
-                benchmark_label.configure(text='同じ残し高さの4個消し：'+ ' / '.join(f'{n}連鎖 {four_clear_at_height(n,h)["efficiency"]:,.2f} 点/秒' for n in (3,4,5)))
+                benchmark_label.configure(text='効率の低い順に表示。灰色の参考行は同じ残し高さの4個消し3・4・5連鎖（積み込み時間を除く）。')
                 refresh_table(multi_rows(h,quick.get()),reference_height=h)
             except (ValueError,tk.TclError):pass
         spin.configure(command=refresh)
@@ -944,18 +1012,19 @@ class App(tk.Tk):
 
     def start_search(self):
         if not self.load_board():return
-        self.search_board=self.current
-        self.review_mode='3手全探索'
         try:
             parts=self.pairs_var.get().upper().replace(',',' ').split()
             if len(parts)!=3 or any(len(x)!=2 or not set(x)<=set(COLORS) for x in parts):raise ValueError('ネクストは「RB GY RR」の形式で3組指定')
             if dead(self.current):raise ValueError('開始盤面が窒息しています')
         except ValueError as exc:messagebox.showerror('入力エラー',str(exc));return
-        self.applied_eff_mode=self.eff_mode.get()
-        self.applied_initial_bonus=self.initial_bonus.get()
-        self.applied_score_bonus=self.score_bonus.get()
+        self.pending_search_context={'board':tuple(self.current),'next_pairs':tuple(parts),
+            'initial_bonus':self.initial_bonus.get(),'efficiency_bonus_mode':self.eff_mode.get(),
+            'score_bonus':self.score_bonus.get(),
+            'image':self.imported_image.copy() if self.imported_image is not None else None}
+        self.search_running=True
+        self.update_analysis_status()
         self.search_button.configure(state='disabled');self.status.configure(text='探索中…')
-        board=self.current;bonus=self.applied_initial_bonus
+        board=self.current;bonus=self.pending_search_context['initial_bonus']
         def work():
             try:self.queue.put(('ok',solve(board,tuple(parts),bonus)))
             except Exception as exc:self.queue.put(('error',str(exc)))
@@ -964,9 +1033,16 @@ class App(tk.Tk):
     def poll(self):
         try:
             kind,value=self.queue.get_nowait();self.search_button.configure(state='normal')
+            self.search_running=False
             if kind=='error':messagebox.showerror('探索エラー',value);self.status.configure(text='エラー')
             else:
                 try:
+                    self.search_context=self.pending_search_context
+                    self.search_board=self.search_context['board']
+                    self.applied_initial_bonus=self.search_context['initial_bonus']
+                    self.applied_eff_mode=self.search_context['efficiency_bonus_mode']
+                    self.applied_score_bonus=self.search_context['score_bonus']
+                    self.review_mode='3手全探索'
                     self.results=value
                     self.stats=[candidate_stats(c,self.search_board,self.applied_initial_bonus) for c in value]
                     self.custom_sort=None
@@ -974,6 +1050,7 @@ class App(tk.Tk):
                 except Exception as exc:
                     self.status.configure(text='結果表示エラー')
                     messagebox.showerror('結果表示エラー',str(exc))
+            self.update_analysis_status()
         except Empty:pass
         self.after(100,self.poll)
 
@@ -1079,7 +1156,7 @@ class App(tk.Tk):
             elif mode=='3手全探索':
                 self.tabs.select(self.tab2)
                 # Do not automatically run an expensive exhaustive search.
-            messagebox.showinfo('盤面を復元','保存済みの盤面を読み込みました。\n必要に応じて修正・再計算してください。')
+            messagebox.showinfo('盤面・NEXTを読み込む','保存済みの盤面を読み込みました。\n必要に応じて修正・再計算してください。')
         except (OSError,KeyError,TypeError,ValueError) as e:
             messagebox.showerror('盤面の再読み込み',str(e))
 
@@ -1097,6 +1174,8 @@ class App(tk.Tk):
             messagebox.showerror('振り返り連携',str(exc));return
         self.review_session=path
         self.review_save_btn.configure(state='normal')
+        self.review_save_btn.pack(fill='x',pady=(12,3))
+        self.review_csv_check.pack(anchor='w',pady=3)
 
     @staticmethod
     def serialize_chain(chain):
@@ -1158,8 +1237,24 @@ class App(tk.Tk):
                     'chain':self.serialize_chain(chain)}
         return {'type':'盤面のみ','board':list(self.current)}
 
-    def save_standalone(self):
+    def save_standalone(self,use_search=None):
+        if self.search_running:
+            messagebox.showinfo('探索中','探索が完了してから保存してください。');return
         if not self.load_board():return
+        context=self.search_context if self.review_mode=='3手全探索' else None
+        pairs=self.pairs_var.get().upper().replace(',',' ').split()
+        if context and use_search is None and (tuple(self.current)!=tuple(context['board']) or tuple(pairs)!=tuple(context['next_pairs'])):
+            choice=tk.Toplevel(self);choice.title('保存する盤面・NEXTを選択')
+            choice.transient(self);choice.grab_set();choice.resizable(False,False)
+            ttk.Label(choice,text='探索後に盤面またはNEXTが変更されています。\nどちらを保存しますか？',padding=14).pack()
+            def choose(original):
+                choice.destroy()
+                self.save_standalone(original)
+            ttk.Button(choice,text='探索時の盤面・NEXT（探索結果・CSV付き）',command=lambda:choose(True)).pack(fill='x',padx=14,pady=5)
+            ttk.Button(choice,text='現在の盤面・NEXT＋前回の探索結果・CSV',command=lambda:choose(False)).pack(fill='x',padx=14,pady=5)
+            ttk.Label(choice,text='解析結果・CSVはどちらも前回の探索時のものを保存します。',padding=10).pack()
+            ttk.Button(choice,text='キャンセル',command=choice.destroy).pack(pady=(0,12))
+            return
         dialog=tk.Toplevel(self);dialog.title('解析・盤面を記録')
         dialog.geometry('520x380');dialog.transient(self);dialog.grab_set()
         ttk.Label(dialog,text='保存先フォルダ').pack(anchor='w',padx=12,pady=(12,2))
@@ -1174,41 +1269,70 @@ class App(tk.Tk):
         memo=tk.Text(dialog,height=7);memo.pack(fill='both',expand=True,padx=12)
         def do_save():
             try:
-                board=list(self.search_board or self.current) if self.review_mode=='3手全探索' else list(self.current)
-                pairs=self.pairs_var.get().upper().split()
+                board=list(context['board']) if context and use_search is not False else list(self.current)
+                pairs=list(context['next_pairs']) if context and use_search is not False else self.pairs_var.get().upper().replace(',',' ').split()
                 result=self.standalone_result()
+                if context:
+                    result.update(type='3手全探索',board=list(context['board']),next_pairs=list(context['next_pairs']),
+                        initial_bonus=context['initial_bonus'],efficiency_bonus_mode=context['efficiency_bonus_mode'],
+                        score_bonus=context['score_bonus'])
+                    result['analysis_input']={'board':list(context['board']),'next_pairs':list(context['next_pairs'])}
+                    result['saved_input_differs']=board!=list(context['board']) or pairs!=list(context['next_pairs'])
+                image=context['image'] if context and use_search is not False else self.imported_image
                 record_store.save(folder.get(),name.get(),result['type'],
                                   memo.get('1.0','end-1c'),board,pairs,
-                                  result,self.imported_image)
+                                  result,image,self.saved_candidate_rows() if context else None)
                 dialog.destroy()
                 messagebox.showinfo('保存','記録に保存しました。')
             except Exception as exc:messagebox.showerror('保存エラー',str(exc),parent=dialog)
         ttk.Button(dialog,text='保存',command=do_save).pack(pady=10)
 
     def open_record_manager(self):
-        window=tk.Toplevel(self);window.title('解析記録・フォルダ管理')
+        window=tk.Toplevel(self);window.title('保存した記録の管理')
         window.geometry('1040x560')
         bar=ttk.Frame(window);bar.pack(fill='x',padx=10,pady=8)
-        ttk.Label(bar,text='フォルダ：').pack(side='left')
+        ttk.Label(bar,text='表示するフォルダ：').pack(side='left')
         folder=tk.StringVar(value='すべて')
         combo=ttk.Combobox(bar,textvariable=folder,state='readonly',width=27)
         combo.pack(side='left',padx=4)
         search=tk.StringVar()
-        ttk.Label(bar,text='検索：').pack(side='left',padx=(15,2))
+        ttk.Label(bar,text='記録名・メモを検索：').pack(side='left',padx=(15,2))
         ttk.Entry(bar,textvariable=search,width=27).pack(side='left')
-        columns=('number','name','analysis_type','memo','saved_at','folder')
+        ttk.Label(window,text='列名をクリックで並べ替え ／ 記録をダブルクリックで盤面・NEXTを読み込み',foreground='#66717c').pack(anchor='w',padx=10)
+        columns=('name','analysis_type','memo','saved_at','folder')
         table=ttk.Treeview(window,columns=columns,show='headings',height=18)
-        for key,label,width in [('number','採番',50),('name','名前',180),
-                                ('analysis_type','解析種別',100),('memo','メモ',260),
-                                ('saved_at','作成日時',180),('folder','フォルダ',150)]:
-            table.heading(key,text=label);table.column(key,width=width,minwidth=45)
+        sort_state={'key':None,'reverse':False}
+        headings={}
+        def sort_by(key):
+            sort_state['reverse']=not sort_state['reverse'] if sort_state['key']==key else False
+            sort_state['key']=key
+            refresh()
+        for key,label,width in [('name','記録名',180),
+                                ('analysis_type','保存した内容',110),('memo','メモ',260),
+                                ('saved_at','保存日時',180),('folder','保存先フォルダ',150)]:
+            headings[key]=label
+            table.heading(key,text=label,command=lambda k=key:sort_by(k));table.column(key,width=width,minwidth=45)
         table.pack(fill='both',expand=True,padx=10,pady=4)
         def refresh(*_):
             choices=['すべて']+record_store.folders()
             combo['values']=choices
             if folder.get() not in choices:folder.set('すべて')
             table.delete(*table.get_children())
-            for r in record_store.list_records(None if folder.get()=='すべて' else folder.get()):
+            records=record_store.list_records(None if folder.get()=='すべて' else folder.get())
+            key=sort_state['key']
+            if key:
+                if key=='saved_at':
+                    from datetime import datetime
+                    def sort_value(record):
+                        try:return datetime.fromisoformat(record.get(key,'')).timestamp()
+                        except (ValueError,TypeError):return 0
+                else:
+                    def sort_value(record):return str(record.get(key,'')).casefold()
+                records=sorted(records,key=sort_value,reverse=sort_state['reverse'])
+            for column,label in headings.items():
+                suffix=(' ▼' if sort_state['reverse'] else ' ▲') if column==key else ''
+                table.heading(column,text=label+suffix)
+            for r in records:
                 if search.get().lower() not in (r.get('name','')+' '+r.get('memo','')).lower():continue
                 table.insert('','end',iid=r['id'],values=tuple(r.get(k,'') for k in columns))
         def chosen():
@@ -1221,8 +1345,22 @@ class App(tk.Tk):
                 old=self.snapshot_board()
                 self.cells=[list(row) for row in item['board']]
                 self.remember_board(old);self.redraw_editor()
-                if item.get('next_pairs'):self.pairs_var.set(' '.join(item['next_pairs']))
+                self.pairs_var.set(' '.join(item.get('next_pairs') or ['..','..','..']))
+                self.imported_image=None
+                picture=record_store.attachment(chosen(),'screenshot')
+                if picture:
+                    from PIL import Image
+                    with Image.open(picture) as source:self.imported_image=source.convert('RGB')
+                self.search_context=None;self.search_board=None
+                self.chain_context=None
+                self.results=[];self.stats=[];self.visible=[];self.review_mode=None
+                self.table.delete(*self.table.get_children())
                 self.latest_record_result=item.get('analysis_result')
+                settings=item.get('analysis_result') or {}
+                self.initial_bonus.set(bool(settings.get('initial_bonus',False)))
+                self.eff_mode.set(settings.get('efficiency_bonus_mode','used'))
+                self.score_bonus.set(bool(settings.get('score_bonus',False)))
+                self.update_analysis_status()
                 window.destroy()
                 messagebox.showinfo('復元','盤面とNEXTを復元しました。保存済み解析結果は記録JSONにも残っています。')
             except Exception as exc:messagebox.showerror('復元エラー',str(exc),parent=window)
@@ -1230,25 +1368,43 @@ class App(tk.Tk):
             if not chosen():return
             try:
                 item=record_store.load(chosen())
-                target=(record_store.ROOT/item['folder']/item['id']/'record.json'
-                        if kind=='json' else Path(item.get('screenshot') or ''))
-                if kind=='image' and not item.get('screenshot'):
-                    messagebox.showinfo('保存画像','この記録には画像がありません。',parent=window)
-                    return
-                if not target.is_file():raise FileNotFoundError(str(target))
+                directory=record_store.record_directory(chosen())
+                target=(directory if kind=='folder' else directory/'record.json' if kind=='json'
+                        else record_store.attachment(chosen(),'screenshot' if kind=='image' else 'csv_file'))
+                if target is None or not target.exists():raise FileNotFoundError('保存ファイルがありません。')
                 os.startfile(str(target))
             except Exception as exc:messagebox.showerror('ファイルを開く',str(exc),parent=window)
         def make_folder():
-            value=simpledialog.askstring('新規フォルダ','フォルダ名',parent=window)
+            value=simpledialog.askstring('フォルダを作成','フォルダ名',parent=window)
             if not value:return
             try:record_store.add_folder(value);folder.set(value);refresh()
             except Exception as exc:messagebox.showerror('フォルダ',str(exc),parent=window)
         def move():
             if not chosen():return
-            destination=simpledialog.askstring('移動','移動先フォルダ名：'+', '.join(record_store.folders()),parent=window)
-            if not destination:return
-            try:record_store.move(chosen(),destination);refresh()
-            except Exception as exc:messagebox.showerror('移動エラー',str(exc),parent=window)
+            record_id=chosen()
+            current=record_store.load(record_id)['folder']
+            destinations=[name for name in record_store.folders() if name!=current]
+            if not destinations:
+                messagebox.showinfo('記録を移動','移動先のフォルダを先に作成してください。',parent=window);return
+            dialog=tk.Toplevel(window);dialog.title('移動先フォルダを選択')
+            dialog.transient(window);dialog.grab_set()
+            ttk.Label(dialog,text='移動先フォルダを選択',padding=10).pack(anchor='w')
+            options=tk.Listbox(dialog,height=min(10,len(destinations)),width=42,exportselection=False)
+            for destination in destinations:options.insert('end',destination)
+            options.pack(fill='both',expand=True,padx=12,pady=4)
+            options.selection_set(0);options.activate(0);options.focus_set()
+            def confirm(*_):
+                selected=options.curselection()
+                if not selected:return
+                try:
+                    record_store.move(record_id,options.get(selected[0]))
+                    dialog.destroy();refresh()
+                except Exception as exc:messagebox.showerror('移動エラー',str(exc),parent=dialog)
+            buttons=ttk.Frame(dialog);buttons.pack(padx=12,pady=10)
+            ttk.Button(buttons,text='このフォルダへ移動',command=confirm).pack(side='left',padx=4)
+            ttk.Button(buttons,text='キャンセル',command=dialog.destroy).pack(side='left',padx=4)
+            options.bind('<Double-Button-1>',confirm)
+            dialog.bind('<Return>',confirm);dialog.bind('<Escape>',lambda _:dialog.destroy())
         def edit():
             if not chosen():return
             item=record_store.load(chosen())
@@ -1258,44 +1414,31 @@ class App(tk.Tk):
             if new_memo is None:return
             try:record_store.update(chosen(),new_name,new_memo);refresh()
             except Exception as exc:messagebox.showerror('編集エラー',str(exc),parent=window)
-        def export_record_csv():
-            rows=record_store.list_records(None if folder.get()=='すべて' else folder.get())
-            keyword=search.get().lower()
-            rows=[r for r in rows if keyword in (r.get('name','')+' '+r.get('memo','')).lower()]
-            if not rows:
-                messagebox.showinfo('CSV出力','出力する記録がありません。',parent=window);return
-            path=filedialog.asksaveasfilename(parent=window,title='記録一覧をCSV保存',
-                defaultextension='.csv',initialfile='puyo_records.csv',
-                filetypes=[('CSVファイル','*.csv')])
-            if not path:return
-            try:
-                fields=['number','name','analysis_type','memo','saved_at','folder','id']
-                with open(path,'w',encoding='utf-8-sig',newline='') as stream:
-                    writer=csv.DictWriter(stream,fieldnames=fields)
-                    writer.writerow({'number':'採番','name':'名前','analysis_type':'解析種別',
-                                     'memo':'メモ','saved_at':'作成日時','folder':'フォルダ','id':'記録ID'})
-                    writer.writerows({k:r.get(k,'') for k in fields} for r in rows)
-                messagebox.showinfo('CSV出力',f'{len(rows)}件を保存しました。',parent=window)
-            except OSError as exc:messagebox.showerror('CSV出力',str(exc),parent=window)
         controls=ttk.Frame(window);controls.pack(fill='x',padx=10,pady=8)
-        ttk.Button(controls,text='新規フォルダ',command=make_folder).pack(side='left',padx=4)
+        ttk.Button(controls,text='フォルダを作成',command=make_folder).pack(side='left',padx=4)
         selection_buttons=[]
-        for label,callback in [('盤面を復元',restore),('フォルダへ移動',move),
-                               ('名前・メモ編集',edit),('JSONを開く',lambda:open_saved_file('json')),
-                               ('画像を開く',lambda:open_saved_file('image'))]:
+        for position,(label,callback) in enumerate([('盤面・NEXTを読み込む',restore),('記録を別フォルダへ移動',move),
+                               ('記録名・メモを編集',edit),('記録データを開く（JSON）',lambda:open_saved_file('json')),
+                               ('保存画像を開く',lambda:open_saved_file('image')),
+                               ('3手探索結果を開く（CSV）',lambda:open_saved_file('csv')),
+                               ('保存フォルダを開く',lambda:open_saved_file('folder'))]):
+            if position==4:
+                controls=ttk.Frame(window);controls.pack(fill='x',padx=10,pady=(0,8))
             button=ttk.Button(controls,text=label,command=callback,state='disabled')
             button.pack(side='left',padx=4)
             selection_buttons.append((label,button))
         ttk.Button(controls,text='一覧を更新',command=refresh).pack(side='left',padx=4)
-        ttk.Button(controls,text='記録一覧をCSV保存',command=export_record_csv).pack(side='left',padx=4)
         def update_buttons(*_):
             record_id=chosen()
             has_image=False
+            has_csv=False
             if record_id:
-                try:has_image=bool(record_store.load(record_id).get('screenshot'))
+                try:
+                    has_image=record_store.attachment(record_id,'screenshot') is not None
+                    has_csv=record_store.attachment(record_id,'csv_file') is not None
                 except Exception:pass
             for label,button in selection_buttons:
-                button.configure(state='normal' if record_id and (label!='画像を開く' or has_image) else 'disabled')
+                button.configure(state='normal' if record_id and (label!='保存画像を開く' or has_image) and (label!='3手探索結果を開く（CSV）' or has_csv) else 'disabled')
         table.bind('<<TreeviewSelect>>',update_buttons)
         table.bind('<Double-Button-1>',lambda _:restore())
         combo.bind('<<ComboboxSelected>>',refresh)
@@ -1304,6 +1447,8 @@ class App(tk.Tk):
         update_buttons()
 
     def save_review(self):
+        if self.search_running:
+            messagebox.showinfo('探索中','探索が完了してから保存してください。');return
         if self.review_session is None:
             messagebox.showwarning('振り返り連携','録画ツールから起動してください。');return
         if not self.load_board():return
@@ -1318,8 +1463,8 @@ class App(tk.Tk):
             stats=self.stats[index]
             data={
                 'type':'3手全探索','board':list(self.search_board),
-                'next_pairs':self.pairs_var.get().upper().split(),
-                'initial_bonus':self.applied_initial_bonus,
+                'next_pairs':list(self.search_context['next_pairs']),
+                'initial_bonus':self.search_context['initial_bonus'],
                 'selected_index':index,'total_score':stats.total,
                 'chigiri':stats.chigiri_total,'all_clears':stats.clear_count,
                 'turns':[{

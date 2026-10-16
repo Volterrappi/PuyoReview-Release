@@ -32,7 +32,7 @@ echo [3/3] Checking libraries...
 ".venv\Scripts\python.exe" -c "import PIL, cv2, webview, clr; print('Libraries OK')"
 if errorlevel 1 goto failed
 echo.
-echo Setup complete. Now open START_Review.bat or START_Analysis.bat.
+echo Setup complete. Now open START_Analysis.bat.
 pause
 exit /b 0
 :no_python

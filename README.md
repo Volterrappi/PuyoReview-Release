@@ -1,39 +1,28 @@
-# PuyoAnalysis v1.0.0 — ぷよぷよ盤面解析・記録管理（Windows）
+# PuyoAnalysis — Windows解析ツール
 
-**初回公開は解析単体版のみ**です。動画再生・YouTubeの自動取り込みを含むPuyoReviewは公開保留中です。
-ぷよぷよeスポーツの盤面を手入力、画像、クリップボードから入力し、連鎖STATS・NEXT3組の3手全探索を実行できます。
+ぷよぷよeスポーツの盤面を手入力・画像・クリップボードから入力して、連鎖STATSやNEXT3組の3手全探索を確認できる非公式ツールです。盤面や解析結果の保存もできます。
 
-## インストール
+## ダウンロード・起動
 1. 64bit Windows 10/11とPython 3.12以上（Python Launcherを含む）を準備します。
-2. Releasesに掲載された `PuyoReview-Source-Windows-v1.0.0.zip` を展開します。
-3. `SETUP_FIRST.bat` を実行し、`Libraries OK` と `Setup complete` を確認します。
-4. `START_Analysis.bat` で起動します。
+2. [ダウンロードページ](https://github.com/Volterrappi/PuyoReview-Release/releases/latest)からZIPをダウンロードして展開します。
+3. `SETUP_FIRST.bat` を起動します（初回のみ・ネット接続が必要です）。
+4. `START_Analysis.bat` を起動します。
 
-Python 3.13.14で旧構成の起動確認済みですが、**新しい記録管理・画像候補提示のWindows実機テストは未完了**です。現時点ではReleaseはDraftのままです。
+Python 3.13で実機動作確認、Python 3.12で自動テスト済みです。環境によって動作しない場合があります。
 
-## 盤面入力
-- 手入力／テキスト貼り付け
-- 画像ファイルやクリップボード画像（Explorer上でコピーした画像ファイルも対応）
-- 縦横比が盤面単体または16:9のゲーム画面に近いとき、1P・2Pの盤面範囲を**仮選択**します。黄色の格子がずれていれば手動で範囲を指定し直してください。推定は精度保証なし
-- 連鎖STATS、3手全探索、結果の表示、必要に応じたCSV書き出し
+## 使い方
+1. 盤面を入力します。3手探索ではNEXT3組も指定します。
+2. 連鎖STATS、または3手全探索を実行します。
+3. 残したい盤面・結果を保存します。
 
-## 記録管理（新機能）
-- 左側の「現在の盤面・解析を記録」で名前・メモ・保存先フォルダを指定します。
-- 「記録一覧・フォルダ管理」から記録検索、盤面とNEXTの復元、フォルダ作成・移動、名前・メモ編集ができます。
-- 保存内容：フォルダごとの採番、名前、解析種別、メモ、作成日時、盤面、NEXT、解析スナップショット、読み込み時の画像（あれば）
-- 保存先：`%USERPROFILE%\PuyoReview\records\`。フォルダ別に記録JSONと任意の `screenshot.png` を保存し、index.jsonで一覧管理します。
-- 保存済み結果の**一覧画面内での詳細プレビュー・再計算操作は今後の改善対象**です。現在は盤面・NEXTを復元して再計算する仕様です。
-- アプリの旧「振り返り記録に保存」ボタンは未公開の振り返りアプリとの連携専用です。単体記録には「現在の盤面・解析を記録」を使ってください。
+保存した記録から、画像・探索結果のCSV・保存フォルダを開けます。
 
-## 動作環境と制約
-- Windows 10/11（64bit）、Python 3.12以上を想定。初回セットアップはネット接続が必要
-- 動画再生およびYouTube自動取り込みは初回公開対象外。任意のローカル画像の解析は可能
-- 探索は厳密な操作可能性・回し入れ判定を行いません
-- 本ツールはゲーム会社の公式製品ではありません
-- ソースは閲覧できますが、独自コード・画像の再配布・商用利用を包括的には許諾していません。利用条件はTERMS.md、第三者コンポーネントはTHIRD_PARTY_NOTICES.mdを参照してください
+詳しい操作や注意点は[利用ガイド](GUIDE.md)をご覧ください。
 
-## 公開準備
-現時点のReleaseはDraftです。検証済みの新しいZIPを添付するまで旧ファイルをダウンロードしないでください。
-YouTubeに関する条文別の評価は [YOUTUBE_POLICY_REVIEW.md](YOUTUBE_POLICY_REVIEW.md) を参照。
+## 不具合・要望
+[Issues](https://github.com/Volterrappi/PuyoReview-Release/issues) または [X @istnpypy](https://x.com/istnpypy)へ。
 
-不具合・要望：[X @istnpypy](https://x.com/istnpypy) / [Issues](https://github.com/Volterrappi/PuyoReview-Release/issues)
+## ライセンス
+独自制作のコード・画像は[MITライセンス](LICENSE)で公開しています。使用ライブラリについては[第三者コンポーネント](THIRD_PARTY_NOTICES.md)をご覧ください。
+
+本ツールは非公式のファン制作ソフトです。ゲームの名称・商標等の権利は各権利者に帰属します。

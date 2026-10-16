@@ -6,10 +6,10 @@ import hashlib
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
-ARCHIVE_NAME = "PuyoReview-Source-Windows-v1.0.0.zip"
+ARCHIVE_NAME = "PuyoAnalysis-Source-Windows-v1.0.1.zip"
 OUT = ROOT / "dist" / ARCHIVE_NAME
 FILES = [
-    "README.md", "TERMS.md", "THIRD_PARTY_NOTICES.md",
+    "README.md", "GUIDE.md", "LICENSE", "THIRD_PARTY_NOTICES.md",
     "SETUP_FIRST.bat", "START_Analysis.bat",
     "requirements-windows.txt",
     "puyo_tools/app.py", "puyo_tools/record_store.py", "puyo_tools/crop_suggest.py", "puyo_tools/tenpai_probe.py",
@@ -44,7 +44,7 @@ def main():
         raise RuntimeError("Analysis-only ZIP includes review/YouTube entry point")
     with ZipFile(OUT, "w", ZIP_DEFLATED) as z:
         for name in FILES:
-            z.write(ROOT / name, f"PuyoReview-Source-Windows-v1.0.0/{name}")
+            z.write(ROOT / name, f"PuyoAnalysis-Source-Windows-v1.0.1/{name}")
     with ZipFile(OUT) as z:
         assert z.testzip() is None
         names = z.namelist()
